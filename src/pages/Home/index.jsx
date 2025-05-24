@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { auth } from "../../services/firebase";
 import { useNavigate } from "react-router-dom";
+import axios from 'axios';
 import '../Home/style.css';
 
 import {
@@ -15,12 +16,6 @@ import {
 
 export default function Home() {
   const navigate = useNavigate();
-
-  const handleLogout = () => {
-    auth.signOut();
-    navigate("/");
-  };
-
   const [formularioAberto, setFormularioAberto] = useState(false);
   const [listaRotinas, setListaRotinas] = useState([]);
   const [rotina, setRotina] = useState({
@@ -31,72 +26,91 @@ export default function Home() {
     dataDeExecucao: '',
     horarioDeExecucao: '',
     tempoDecorrido: null,
-    horarioConclusao: null
+    horarioConclusao: null,
+    concluido: false
   });
-  const [comentarios, setComentarios] = useState({});
+
   const [termoDePesquisa, setTermoDePesquisa] = useState('');
   const [mensagem, setMensagem] = useState('');
   const [ultimaRotinaConcluida, setUltimaRotinaConcluida] = useState(null);
 
+  const API_URL = 'http://localhost:8080/api/rotinas';
+
+  const handleLogout = () => {
+    auth.signOut();
+    navigate("/");
+  };
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setRotina({
-      ...rotina,
-      [name]: value,
-    });
+    setRotina({ ...rotina, [name]: value });
   };
 
-  const handleFormSubmit = (e) => {
+  const handleFormSubmit = async (e) => {
     e.preventDefault();
-    const novaRotina = {
-      ...rotina,
-      id: Date.now(),
-      concluido: false,
-      tempoDecorrido: null,
-      horarioConclusao: null,
-    };
-    setListaRotinas([...listaRotinas, novaRotina]);
-    setRotina({
-      nome: '',
-      objetivo: '',
-      colaborador: '',
-      instrucoes: '',
-      dataDeExecucao: '',
-      horarioDeExecucao: '',
-      tempoDecorrido: null,
-      horarioConclusao: null,
-    });
-    setFormularioAberto(false);
-  };
-
-  const toggleTaskCompletion = (id) => {
-    const atualizadas = [...listaRotinas];
-    const r = atualizadas.find((rotina) => rotina.id === id);
-
-    if (!r.concluido) {
-      r.concluido = true;
-      r.horarioConclusao = new Date();
-      setUltimaRotinaConcluida(r);
-    } else {
-      r.concluido = false;
-      r.horarioConclusao = null;
+    try {
+      const response = await axios.post(API_URL, rotina);
+      setListaRotinas(prev => [...prev, response.data]);
+      setFormularioAberto(false);
+      setRotina({
+        nome: '',
+        objetivo: '',
+        colaborador: '',
+        instrucoes: '',
+        dataDeExecucao: '',
+        horarioDeExecucao: '',
+        tempoDecorrido: null,
+        horarioConclusao: null,
+        concluido: false
+      });
+    } catch (error) {
+      console.error('Erro ao salvar rotina:', error);
     }
-
-    setListaRotinas(atualizadas);
   };
 
-  const deleteRoutine = (id) => {
-    const atualizadas = listaRotinas.filter((rotina) => rotina.id !== id);
-    setListaRotinas(atualizadas);
-    setComentarios((prev) => {
-      const novos = { ...prev };
-      delete novos[id];
-      return novos;
+  const fetchRotinas = async () => {
+    try {
+      const response = await axios.get(API_URL);
+      setListaRotinas(response.data);
+    } catch (error) {
+      console.error('Erro ao carregar rotinas:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchRotinas();
+  }, []);
+  const toggleTaskCompletion = (id) => {
+    // Atualização local apenas da flag 'concluido'
+    const atualizadas = listaRotinas.map(r => {
+      if (r.codigo === id) {
+        return {
+          ...r,
+          concluido: !r.concluido,
+          horarioConclusao: !r.concluido ? new Date().toISOString() : null
+        };
+      }
+      return r;
     });
+    setListaRotinas(atualizadas);
+
+    if (!listaRotinas.find(r => r.codigo === id).concluido) {
+      const rotinaConcluida = listaRotinas.find(r => r.codigo === id);
+      setUltimaRotinaConcluida(rotinaConcluida);
+    }
   };
 
-  const rotinasFiltradas = listaRotinas.filter((rotina) =>
-    rotina.nome.toLowerCase().includes(termoDePesquisa.toLowerCase())
+  const deleteRoutine = async (id) => {
+    try {
+      await axios.delete(`${API_URL}/${id}`);
+      setListaRotinas(prev => prev.filter(r => r.codigo !== id));
+    } catch (error) {
+      console.error('Erro ao excluir rotina:', error);
+    }
+  };
+
+  const rotinasFiltradas = listaRotinas.filter(rotina =>
+    rotina.nome?.toLowerCase().includes(termoDePesquisa.toLowerCase())
   );
 
   useEffect(() => {
@@ -106,51 +120,13 @@ export default function Home() {
     }
   }, [ultimaRotinaConcluida]);
 
-  useEffect(() => {
-    const timers = listaRotinas.map((rotina, index) => {
-      if (!rotina.concluido && rotina.dataDeExecucao && rotina.horarioDeExecucao) {
-        const execucaoDateTime = new Date(`${rotina.dataDeExecucao}T${rotina.horarioDeExecucao}`);
-        const now = new Date();
-
-        if (execucaoDateTime <= now) {
-          const timerId = setInterval(() => {
-            const atualizadas = [...listaRotinas];
-            const timeElapsed = Math.max(0, new Date() - execucaoDateTime);
-            atualizadas[index].tempoDecorrido = timeElapsed;
-            setListaRotinas(atualizadas);
-          }, 1000);
-
-          return { timerId, index };
-        }
-      }
-      return null;
-    });
-
-    return () => {
-      timers.forEach((timer) => {
-        if (timer) clearInterval(timer.timerId);
-      });
-    };
-  }, [listaRotinas]);
-
   const formatTime = (milliseconds) => {
+    if (!milliseconds) return '0s';
     const totalSeconds = Math.floor(milliseconds / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
     return `${hours}h ${minutes}m ${seconds}s`;
-  };
-
-  const listaRotinasOrdenadas = [
-    ...listaRotinas.filter(r => !r.concluido),
-    ...listaRotinas.filter(r => r.concluido),
-  ];
-
-  const handleCommentChange = (id, comment) => {
-    setComentarios((prev) => ({
-      ...prev,
-      [id]: comment,
-    }));
   };
 
   return (
@@ -260,7 +236,7 @@ export default function Home() {
               <li className="rotina-vazia">Não há nenhuma rotina</li>
             ) : (
               rotinasFiltradas.map((r) => (
-                <li key={r.id} className={`item-rotina ${r.concluido ? 'concluida' : ''}`}>
+                <li key={r.codigo} className={`item-rotina ${r.concluido ? 'concluida' : ''}`}>
                   <div className="rotina-info">
                     <strong>{r.nome}</strong> - {r.objetivo} (Execução: {r.dataDeExecucao} às {r.horarioDeExecucao})
                   </div>
@@ -268,8 +244,9 @@ export default function Home() {
                     className="checkbox-rotina"
                     type="checkbox"
                     checked={r.concluido}
-                    onChange={() => toggleTaskCompletion(r.id)}
+                    onChange={() => toggleTaskCompletion(r.codigo)}
                   />
+                  <button className="botao-excluir" onClick={() => deleteRoutine(r.codigo)}>Excluir</button>
                 </li>
               ))
             )}
@@ -277,39 +254,6 @@ export default function Home() {
         </div>
 
         <button onClick={handleLogout} className="botao-sair">Sair</button>
-      </div>
-
-      <div className="edit">
-        <div className="texto-edit">
-          <h1 className="titulo-edit">Lista das suas rotinas!</h1>
-          <p>As rotinas concluídas serão movidas para o final da lista!</p>
-        </div>
-        <ul className="lista-rotina">
-          {listaRotinasOrdenadas.length === 0 ? (
-            <li className="rotina-vazia">Não há nenhuma rotina cadastrada.</li>
-          ) : (
-            listaRotinasOrdenadas.map((r) => (
-              <li key={r.id} className={`item-rotina ${r.concluido ? 'concluida' : ''}`}>
-                <div className="rotina-info">
-                  <strong>{r.nome}</strong> - {r.objetivo} (Execução: {r.dataDeExecucao} às {r.horarioDeExecucao})
-                </div>
-                {r.tempoDecorrido !== null && (
-                  <div className="tempo-decorrido">Tempo: {formatTime(r.tempoDecorrido)}</div>
-                )}
-                {r.concluido && r.horarioConclusao && (
-                  <div className="horario-conclusao">Concluído em: {r.horarioConclusao.toLocaleString()}</div>
-                )}
-                <textarea
-                  className="comentario"
-                  placeholder="Adicione um comentário..."
-                  value={comentarios[r.id] || ''}
-                  onChange={(e) => handleCommentChange(r.id, e.target.value)}
-                />
-                <button className="botao-excluir" onClick={() => deleteRoutine(r.id)}>Excluir</button>
-              </li>
-            ))
-          )}
-        </ul>
       </div>
     </div>
   );
