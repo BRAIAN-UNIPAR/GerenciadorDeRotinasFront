@@ -18,6 +18,7 @@ export default function Home() {
   const navigate = useNavigate();
   const [formularioAberto, setFormularioAberto] = useState(false);
   const [listaRotinas, setListaRotinas] = useState([]);
+  const [modoEdicao, setModoEdicao] = useState(false);
   const [rotina, setRotina] = useState({
     nome: '',
     objetivo: '',
@@ -49,23 +50,40 @@ export default function Home() {
   const handleFormSubmit = async (e) => {
     e.preventDefault();
     try {
-      const response = await axios.post(API_URL, rotina);
-      setListaRotinas(prev => [...prev, response.data]);
+      if (modoEdicao) {
+        await axios.put(`${API_URL}/${rotina.codigo}`, rotina);
+        setListaRotinas(prev => prev.map(r => (r.codigo === rotina.codigo ? rotina : r)));
+      } else {
+        const response = await axios.post(API_URL, rotina);
+        setListaRotinas(prev => [...prev, response.data]);
+      }
+
       setFormularioAberto(false);
-      setRotina({
-        nome: '',
-        objetivo: '',
-        colaborador: '',
-        instrucoes: '',
-        dataDeExecucao: '',
-        horarioDeExecucao: '',
-        tempoDecorrido: null,
-        horarioConclusao: null,
-        concluido: false
-      });
+      setModoEdicao(false);
+      resetarRotina();
     } catch (error) {
       console.error('Erro ao salvar rotina:', error);
     }
+  };
+
+  const resetarRotina = () => {
+    setRotina({
+      nome: '',
+      objetivo: '',
+      colaborador: '',
+      instrucoes: '',
+      dataDeExecucao: '',
+      horarioDeExecucao: '',
+      tempoDecorrido: null,
+      horarioConclusao: null,
+      concluido: false
+    });
+  };
+
+  const editarRotina = (rotinaSelecionada) => {
+    setRotina(rotinaSelecionada);
+    setModoEdicao(true);
+    setFormularioAberto(true);
   };
 
   const fetchRotinas = async () => {
@@ -80,23 +98,62 @@ export default function Home() {
   useEffect(() => {
     fetchRotinas();
   }, []);
-  const toggleTaskCompletion = (id) => {
-    // Atualização local apenas da flag 'concluido'
-    const atualizadas = listaRotinas.map(r => {
-      if (r.codigo === id) {
-        return {
-          ...r,
-          concluido: !r.concluido,
-          horarioConclusao: !r.concluido ? new Date().toISOString() : null
-        };
-      }
-      return r;
-    });
-    setListaRotinas(atualizadas);
 
-    if (!listaRotinas.find(r => r.codigo === id).concluido) {
-      const rotinaConcluida = listaRotinas.find(r => r.codigo === id);
-      setUltimaRotinaConcluida(rotinaConcluida);
+  // Função para calcular tempo decorrido entre inicio e fim
+  const calcularTempoDecorrido = (dataExecucao, horarioExecucao, horarioConclusao) => {
+    if (!dataExecucao || !horarioExecucao || !horarioConclusao) return 0;
+
+    try {
+     
+      const inicio = new Date(`${dataExecucao}T${horarioExecucao}:00`);
+      // HorarioConclusao já vem no formato ISO string, converte para Date
+      const fim = new Date(horarioConclusao);
+      const diff = fim.getTime() - inicio.getTime();
+      return diff > 0 ? diff : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  const toggleTaskCompletion = async (id) => {
+    try {
+      const rotinaAtual = listaRotinas.find(r => r.codigo === id);
+      if (!rotinaAtual) return;
+
+      const novoStatus = !rotinaAtual.concluido;
+      const horarioConclusao = novoStatus ? new Date().toISOString() : null;
+      const tempoDecorrido = calcularTempoDecorrido(
+        rotinaAtual.dataDeExecucao,
+        rotinaAtual.horarioDeExecucao,
+        horarioConclusao
+      );
+
+      // Atualiza localmente
+      const atualizadas = listaRotinas.map(r => {
+        if (r.codigo === id) {
+          return {
+            ...r,
+            concluido: novoStatus,
+            horarioConclusao: horarioConclusao,
+            tempoDecorrido: tempoDecorrido
+          };
+        }
+        return r;
+      });
+      setListaRotinas(atualizadas);
+
+      // Atualiza no back-end com PATCH
+      await axios.patch(`${API_URL}/${id}/status`, {
+        concluido: novoStatus,
+        horarioConclusao: horarioConclusao,
+        tempoDecorrido: tempoDecorrido
+      });
+
+      if (novoStatus) {
+        setUltimaRotinaConcluida(rotinaAtual);
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar status da rotina:', error);
     }
   };
 
@@ -137,8 +194,8 @@ export default function Home() {
             <h1>Rotinas Trabalhistas</h1>
           </div>
 
-          <Dialog open={formularioAberto} onClose={() => setFormularioAberto(false)} maxWidth="sm" fullWidth>
-            <DialogTitle>Nova Rotina</DialogTitle>
+          <Dialog open={formularioAberto} onClose={() => { setFormularioAberto(false); setModoEdicao(false); }} maxWidth="sm" fullWidth>
+            <DialogTitle>{modoEdicao ? 'Editar Rotina' : 'Nova Rotina'}</DialogTitle>
             <form onSubmit={handleFormSubmit}>
               <DialogContent>
                 <TextField
@@ -201,17 +258,17 @@ export default function Home() {
                 />
               </DialogContent>
               <DialogActions>
-                <Button onClick={() => setFormularioAberto(false)} color="secondary">
+                <Button onClick={() => { setFormularioAberto(false); setModoEdicao(false); }} color="secondary">
                   Cancelar
                 </Button>
                 <Button type="submit" variant="contained" color="primary">
-                  Salvar Rotina
+                  {modoEdicao ? 'Atualizar' : 'Salvar Rotina'}
                 </Button>
               </DialogActions>
             </form>
           </Dialog>
 
-          <button className="adicionar-rotina" onClick={() => setFormularioAberto(true)}>
+          <button className="adicionar-rotina" onClick={() => { setFormularioAberto(true); resetarRotina(); setModoEdicao(false); }}>
             Nova Rotina
           </button>
 
@@ -239,6 +296,8 @@ export default function Home() {
                 <li key={r.codigo} className={`item-rotina ${r.concluido ? 'concluida' : ''}`}>
                   <div className="rotina-info">
                     <strong>{r.nome}</strong> - {r.objetivo} (Execução: {r.dataDeExecucao} às {r.horarioDeExecucao})
+                    <br />
+                    Tempo decorrido: {formatTime(r.tempoDecorrido)}
                   </div>
                   <input
                     className="checkbox-rotina"
@@ -246,7 +305,10 @@ export default function Home() {
                     checked={r.concluido}
                     onChange={() => toggleTaskCompletion(r.codigo)}
                   />
-                  <button className="botao-excluir" onClick={() => deleteRoutine(r.codigo)}>Excluir</button>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+                    <button className="botao-excluir" onClick={() => deleteRoutine(r.codigo)}>Excluir</button>
+                    <button className="botao-submit" onClick={() => editarRotina(r)}>Editar</button>
+                  </div>
                 </li>
               ))
             )}
